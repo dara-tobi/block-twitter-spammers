@@ -1,0 +1,19 @@
+{
+    "name": "dara/block-twitter-spammers",
+    "description": "Block Users on Twitter who include too many trending topics in their Tweets",
+    "authors": [
+        {
+            "name": "Dara Oladosu",
+            "email": "daradosu@gmail.com"
+        }
+    ],
+    "require": {
+        "pear/math_combinatorics": "dev-trunk",
+        "abraham/twitteroauth": "^1.1",
+        "vlucas/phpdotenv": "^5.0"
+    },
+    "autoload": {
+        "classmap": ["Lib/"],
+        "files": ["Lib/Utils/functions.php"]
+    }
+}
