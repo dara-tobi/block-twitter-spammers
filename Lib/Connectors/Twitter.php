@@ -20,7 +20,7 @@ class Twitter {
 		return $twitterUserConnection;
 	}
 
-	public static function connect($httpVerb, $endpoint, $options = null) {
+	public static function connect($httpVerb, $endpoint, $options = []) {
 		$twitterUserConnection = static::getTwitterConnection();
 
 		try {
@@ -44,7 +44,7 @@ class Twitter {
 			return $response;
 		} catch (\Exception $e) {
 			if (strstr($e->getMessage(), 'timed out')) {
-				printWithLineBreaks("\033[31mThe API request timed out the $endpoint endpoint\033[0m");
+				printWithLineBreaks("\033[31mThe API request timed out for the $endpoint endpoint\033[0m");
 				return ['back_off' => true];
 			}
 		}
