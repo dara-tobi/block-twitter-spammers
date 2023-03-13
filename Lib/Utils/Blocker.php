@@ -14,12 +14,14 @@ class Blocker
     }
 
     public static function run() {
+        $numberOfTagsToCombine = getenv('NUMBER_OF_TAGS_TO_COMBINE') ?: 4;
         $timeStart = microtime(true);
         $woeId = getenv('WOEID');
         $trends = static::getTrends($woeId);
+        $numberOfTrendsToGet = getenv('NUMBER_OF_TRENDS_TO_GET') ?: 19;
 
         if (!$trends) {
-            die('no trends for this location; nothing to see');
+            die('no trends for this location; nothing to see, do or block here');
         }
 
         $rateLimits = static::getRateLimits();
@@ -27,8 +29,8 @@ class Blocker
 
         printWithLineBreaks("Starting search for $searchRateLimit unique topic combinations");
 
-        $topTwelveTopics = static::getTopTwelveTrendingTopics($trends);
-        $topicCombinationsArray = Combiner::getCombinations($topTwelveTopics, 3);
+        $topTrendingTopics = static::getTopTrendingTopics($trends, $numberOfTrendsToGet);
+        $topicCombinationsArray = Combiner::getCombinations($topTrendingTopics, $numberOfTagsToCombine);
         $searchStringsDataArray = static::getStringsToSearchFor($topicCombinationsArray, $searchRateLimit);
         $spamTweetsData = static::getSpamTweetsFromTwitter($searchStringsDataArray, $searchRateLimit);
 
@@ -36,16 +38,20 @@ class Blocker
         $totalSpamTweets = $spamTweetsData['spamTweetsCount'];
         $uniqueSpammersCount = count($spamTweetsArray);
 
-        static::blockSpammers($spamTweetsArray, $uniqueSpammersCount);
+        $blockResults = static::blockSpammers($spamTweetsArray, $uniqueSpammersCount);
 
         $timeEnd = microtime(true);
         $executionTime = ($timeEnd - $timeStart)/60;
 
         printWithLineBreaks("Total currently spamming users :: ". $uniqueSpammersCount);
         printWithLineBreaks("Total spam tweets by those users :: ". $totalSpamTweets);
-
+        printWithLineBreaks("Blocked ". $blockResults['total_blocked_users']. " user(s)");
+        printWithLineBreaks("Skipped ". $blockResults['total_user_with_too_few_spam_tweets']. " user(s) with too few spam tweets");
+        printWithLineBreaks("Already blocked ". $blockResults['total_already_blocked_users']. " user(s) before");
         //execution time of the script
-        printWithLineBreaks("Total Execution Time : $executionTime Mins");
+        $executionTimeInMinutes = floor($executionTime);
+        $executionTimeInSeconds = floor(($executionTime - $executionTimeInMinutes) * 60);
+        printWithLineBreaks("Total Execution Time : $executionTimeInMinutes Mins $executionTimeInSeconds Secs");
     }
 
     public static function getTrends($woeId) {
@@ -53,14 +59,14 @@ class Blocker
         return data_get($trendsSearchResponse, "0.trends");
     }
 
-    public static function getTopTwelveTrendingTopics($trends) {
-        $topTwelveTopics = [];
+    public static function getTopTrendingTopics($trends, $numberOfTrendsToGet) {
+        $topTrendingTopics = [];
 
-        for ($i = 0; $i < 12; $i++) {
-            $topTwelveTopics[] = data_get($trends[$i], "name");
+        for ($i = 0; $i <= $numberOfTrendsToGet; $i++) {
+            $topTrendingTopics[] = data_get($trends[$i], "name");
         }
 
-        return $topTwelveTopics;
+        return $topTrendingTopics;
     }
 
     public static function getStringsToSearchFor($topicCombinationsArray, $limit) {
@@ -125,7 +131,15 @@ class Blocker
                         $spam['topics'] = $query;
                         $spam['topicsArray'] = $searchStringArray;
                         $spam['link'] = "https://twitter.com/$handle/status/$statusId";
-                        $spamTweets[$handle] = $spam; // ensure that users in the list are unique
+                        // count spam tweets per user; ensure handles are unique
+                        if (isset($spamTweets[$handle])) {
+                            $spamTweets[$handle]['count']++;
+                            $spamTweets[$handle]['links'][$spam['link']] = $spam['text'];
+                        } else {
+                            $spam['count'] = 1;
+                            $spam['links'][$spam['link']] = $spam['text'];
+                            $spamTweets[$handle] = $spam;
+                        }
                         $spamTweetsCount++;
                     }
                 }
@@ -138,9 +152,32 @@ class Blocker
 
     public static function blockSpammers($spamTweets, $uniqueSpammersCount) {
         $blockCount = 1;
+        $usersWithTooFewSpamTweets = 0;
+        $alreadyBlockedUsers = 0;
+        $spamLimit = getenv('SPAM_THRESHOLD') ?: 1;
         foreach ($spamTweets as $spam) {
+            if ($spam['count'] < $spamLimit) {
+                printWithLineBreaks("\033[97mSkipping https://twitter.com/" .$spam['handle']." :: ".$spam['link']." :: ".$spam['count']." spam tweet(s)\033[0m");
+                $usersWithTooFewSpamTweets++;
+                continue;
+            }
+            if (file_exists('blocked_ids.txt') && strpos(file_get_contents('blocked_ids.txt'), $spam['userId']) !== false) {
+                printWithLineBreaks("\033[95mUser already blocked :: https://twitter.com/" .$spam['handle']." :: ".$spam['link']." :: ".$spam['count']." spam tweet(s)\033[0m");
+                $alreadyBlockedUsers++;
+                continue;
+            }
             $delimitedTopicsString = static::getDelimitedTopicsString($spam['topicsArray']);
-            printWithLineBreaks("\033[92mDoing block $blockCount of $uniqueSpammersCount: Blocking https://twitter.com/" .$spam['handle']." for spamming topics :: " . $delimitedTopicsString. " with Tweet ::\033[93m\n". $spam['text']."\033[0m");
+
+            printWithLineBreaks("\033[92mDoing block $blockCount of $uniqueSpammersCount: Blocking https://twitter.com/" .$spam['handle']);
+            printWithLineBreaks("Topics :: " . $delimitedTopicsString . "\033[0m");
+            printWithLineBreaks("\033[94mTotal spam tweet(s) :: " . $spam['count'] . "\033[0m");
+            try {
+                $delimitedLInksString = static::getDelimitedLinksString($spam['links']);
+                printWithLineBreaks("\033[0mSpam tweets :: \n" . $delimitedLInksString . "\033[0m");
+            } catch (\Exception $e) {
+                printWithLineBreaks("\033[91mError getting spam links\033[0m");
+            }
+
             $blockResponse = Twitter::connect('post', 'blocks/create', ['id' => $spam['userId'], 'skip_status' => true, 'include_entities' => false]);
 
             if (data_get($blockResponse, "back_off")) {
@@ -148,10 +185,19 @@ class Blocker
             }
 
             $blockCount++;
-            $file = fopen('blocked_users_log.txt', 'a');
+            $today = date("Y-m-d");
+            $file = fopen('blocked_users_log_' . $today . '.txt', 'a');
             fwrite($file, json_encode($blockResponse) . "\n");
             fclose($file);
+            $idsFile = fopen('blocked_ids.txt', 'a');
+            fwrite($idsFile, $spam['userId'] . "\n");
+            fclose($idsFile);
         }
+        return [
+            'total_user_with_too_few_spam_tweets' => $usersWithTooFewSpamTweets,
+            'total_already_blocked_users' => $alreadyBlockedUsers,
+            'total_blocked_users' => $blockCount - 1,
+        ];
     }
 
     public static function getDelimitedTopicsString($topicsArray) {
@@ -162,5 +208,25 @@ class Blocker
         $string .= implode("', '", $topicsArray);
 
         return $string .= "' and '$last'";
+    }
+
+    public static function getDelimitedLinksString($linksArray) {
+        $number = 1;
+        if (count($linksArray) == 1) {
+            return $number.". ". current($linksArray)." ". "(".key($linksArray).") \n\n";
+        }
+        $lastValue = end($linksArray);
+        $lastKey = key($linksArray);
+        array_pop($linksArray);
+        $string = "";
+
+        foreach ($linksArray as $link => $text) {
+            $string .= "$number. $text ($link) \n\n";
+            $number++;
+        }
+
+        $last = $number.". ".$lastValue." (".$lastKey.") \n\n";
+
+        return $string . $last;
     }
 }
