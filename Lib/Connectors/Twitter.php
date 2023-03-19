@@ -33,6 +33,12 @@ class Twitter {
 					printWithLineBreaks("\033[31mMessage: ". $error->message." Code: ". $error->code."\033[0m");
 				}
 
+				// Message: Over capacity Code: 130
+				if ($error->message == 'Over capacity' && $error->code == 130) {
+					printWithLineBreaks("\033[31mTwitter's API is currently over capacity for the $endpoint endpoint\033[0m");
+					return ['back_off' => true];
+				}
+
 				if ($error->message == 'Rate limit exceeded' && $error->code == 88) {
 					printWithLineBreaks("\033[31mYou've reached the API request limit for the $endpoint endpoint\033[0m");
 					return ['back_off' => true];

@@ -26,14 +26,25 @@ class Blocker
 
         $rateLimits = static::getRateLimits();
         $searchRateLimit = data_get($rateLimits, 'resources.search./search/tweets.remaining');
+        printWithLineBreaks("Search rate limit remaining :: $searchRateLimit");
+        if ($searchRateLimit < 1) {
+            printWithLineBreaks("Search rate limit reached. Exiting. Try again in 15 minutes.");
+            die();
+        }
 
-        printWithLineBreaks("Starting search for $searchRateLimit unique topic combinations");
 
         $topTrendingTopics = static::getTopTrendingTopics($trends, $numberOfTrendsToGet);
         $topicCombinationsArray = Combiner::getCombinations($topTrendingTopics, $numberOfTagsToCombine);
         $searchStringsDataArray = static::getStringsToSearchFor($topicCombinationsArray, $searchRateLimit);
         $spamTweetsData = static::getSpamTweetsFromTwitter($searchStringsDataArray, $searchRateLimit);
+        $totalCombinations = count($topicCombinationsArray);
+        if ($totalCombinations < $searchRateLimit) {
+            $numberOfSearches = $totalCombinations;
+        } else {
+            $numberOfSearches = $searchRateLimit;
+        }
 
+        printWithLineBreaks("Starting search for spam tweets with $numberOfSearches combinations of trending topics");
         $spamTweetsArray = $spamTweetsData['spamTweets'];
         $totalSpamTweets = $spamTweetsData['spamTweetsCount'];
         $uniqueSpammersCount = count($spamTweetsArray);
@@ -107,11 +118,16 @@ class Blocker
 
             $statuses = data_get($spamTweetsSearchResponse, "statuses");
 
+            if (!is_array($statuses)) {
+                print_r($spamTweetsSearchResponse);
+                printWithLineBreaks("Died after not getting statuses array for $delimitedTopicsString");
+                die();
+            }
+
             printWithLineBreaks("search $searchCount of $limit. Gotten " . count($statuses) . " spam Tweet(s) for $delimitedTopicsString");
 
             if (!empty($statuses)) {
                 foreach ($statuses as $status) {
-                    $spamTweetsCount++;
                     if (!data_get($status, 'retweeted_status')) {
                         $spam = [];
                         $statusId = data_get($status, "id_str");
@@ -131,14 +147,26 @@ class Blocker
                         $spam['topics'] = $query;
                         $spam['topicsArray'] = $searchStringArray;
                         $spam['link'] = "https://twitter.com/$handle/status/$statusId";
+                        if (array_key_exists($handle, $spamTweets)) {
+                            // continue if we've seen this statusid before
+                            if (array_key_exists($spam['link'], $spamTweets[$handle]['links'])) {
+                                continue;
+                            }
+                        }
                         // count spam tweets per user; ensure handles are unique
                         if (isset($spamTweets[$handle])) {
                             $spamTweets[$handle]['count']++;
                             $spamTweets[$handle]['links'][$spam['link']] = $spam['text'];
                         } else {
-                            $spam['count'] = 1;
-                            $spam['links'][$spam['link']] = $spam['text'];
-                            $spamTweets[$handle] = $spam;
+                            $spamTweets[$handle]['handle'] = $handle;
+                            $spamTweets[$handle]['text'] = $text;
+                            $spamTweets[$handle]['userId'] = $userId;
+                            $spamTweets[$handle]['topics'] = $query;
+                            $spamTweets[$handle]['topicsArray'] = $searchStringArray;
+                            $spamTweets[$handle]['link'] = "https://twitter.com/$handle/status/$statusId";
+
+                            $spamTweets[$handle]['count'] = 1;
+                            $spamTweets[$handle]['links'][$spam['link']] = $spam['text'];
                         }
                         $spamTweetsCount++;
                     }
